@@ -4,10 +4,11 @@ import 'dart:convert';
 import 'package:bot_toast/bot_toast.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_hbb/common/hbbs/hbbs.dart';
+import 'package:flutter_hbb/models/ab_model.dart';
 import 'package:get/get.dart';
-import 'package:http/http.dart' as http;
 
 import '../common.dart';
+import '../utils/http_service.dart' as http;
 import 'model.dart';
 import 'platform_model.dart';
 
@@ -22,6 +23,7 @@ class UserModel {
   UserModel(this.parent);
 
   void refreshCurrentUser() async {
+    if (bind.isDisableAccount()) return;
     final token = bind.mainGetLocalOption(key: 'access_token');
     if (token == '') {
       await updateOtherModels();
@@ -45,7 +47,7 @@ class UserModel {
       refreshingUser = false;
       final status = response.statusCode;
       if (status == 401 || status == 400) {
-        reset(clearAbCache: status == 401);
+        reset(resetOther: status == 401);
         return;
       }
       final data = json.decode(utf8.decode(response.bodyBytes));
@@ -84,11 +86,13 @@ class UserModel {
     }
   }
 
-  Future<void> reset({bool clearAbCache = false}) async {
+  Future<void> reset({bool resetOther = false}) async {
     await bind.mainSetLocalOption(key: 'access_token', value: '');
     await bind.mainSetLocalOption(key: 'user_info', value: '');
-    if (clearAbCache) await bind.mainClearAb();
-    await gFFI.groupModel.reset();
+    if (resetOther) {
+      await gFFI.abModel.reset();
+      await gFFI.groupModel.reset();
+    }
     userName.value = '';
   }
 
@@ -100,7 +104,10 @@ class UserModel {
 
   // update ab and group status
   static Future<void> updateOtherModels() async {
-    await Future.wait([gFFI.abModel.pullAb(), gFFI.groupModel.pull()]);
+    await Future.wait([
+      gFFI.abModel.pullAb(force: ForcePullAb.listAndCurrent, quiet: false),
+      gFFI.groupModel.pull()
+    ]);
   }
 
   Future<void> logOut({String? apiServer}) async {
@@ -120,7 +127,7 @@ class UserModel {
     } catch (e) {
       debugPrint("request /api/logout failed: err=$e");
     } finally {
-      await reset(clearAbCache: true);
+      await reset(resetOther: true);
       gFFI.dialogManager.dismissByTag(tag);
     }
   }
@@ -129,7 +136,6 @@ class UserModel {
   Future<LoginResponse> login(LoginRequest loginRequest) async {
     final url = await bind.mainGetApiServer();
     final resp = await http.post(Uri.parse('$url/api/login'),
-        headers: {'Content-Type': 'application/json'},
         body: jsonEncode(loginRequest.toJson()));
 
     final Map<String, dynamic> body;

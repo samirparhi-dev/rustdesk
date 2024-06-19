@@ -34,7 +34,8 @@ class RawKeyFocusScope extends StatelessWidget {
             canRequestFocus: true,
             focusNode: focusNode,
             onFocusChange: onFocusChange,
-            onKey: inputModel.handleRawKeyEvent,
+            onKey: (FocusNode data, RawKeyEvent e) =>
+                inputModel.handleRawKeyEvent(e),
             child: child));
   }
 }
@@ -76,7 +77,7 @@ class _RawTouchGestureDetectorRegionState
   FFI get ffi => widget.ffi;
   FfiModel get ffiModel => widget.ffiModel;
   InputModel get inputModel => widget.inputModel;
-  bool get handleTouch => isDesktop || ffiModel.touchMode;
+  bool get handleTouch => (isDesktop || isWebDesktop) || ffiModel.touchMode;
   SessionID get sessionId => ffi.sessionId;
 
   @override
@@ -93,8 +94,10 @@ class _RawTouchGestureDetectorRegionState
       return;
     }
     if (handleTouch) {
-      ffi.cursorModel.move(d.localPosition.dx, d.localPosition.dy);
-      inputModel.tapDown(MouseButtons.left);
+      // Desktop or mobile "Touch mode"
+      if (ffi.cursorModel.move(d.localPosition.dx, d.localPosition.dy)) {
+        inputModel.tapDown(MouseButtons.left);
+      }
     }
   }
 
@@ -103,8 +106,9 @@ class _RawTouchGestureDetectorRegionState
       return;
     }
     if (handleTouch) {
-      ffi.cursorModel.move(d.localPosition.dx, d.localPosition.dy);
-      inputModel.tapUp(MouseButtons.left);
+      if (ffi.cursorModel.move(d.localPosition.dx, d.localPosition.dy)) {
+        inputModel.tapUp(MouseButtons.left);
+      }
     }
   }
 
@@ -112,7 +116,10 @@ class _RawTouchGestureDetectorRegionState
     if (lastDeviceKind != PointerDeviceKind.touch) {
       return;
     }
-    inputModel.tap(MouseButtons.left);
+    if (!handleTouch) {
+      // Mobile, "Mouse mode"
+      inputModel.tap(MouseButtons.left);
+    }
   }
 
   onDoubleTapDown(TapDownDetails d) {
@@ -127,6 +134,9 @@ class _RawTouchGestureDetectorRegionState
 
   onDoubleTap() {
     if (lastDeviceKind != PointerDeviceKind.touch) {
+      return;
+    }
+    if (ffiModel.touchMode && ffi.cursorModel.lastIsBlocked) {
       return;
     }
     inputModel.tap(MouseButtons.left);
@@ -178,7 +188,7 @@ class _RawTouchGestureDetectorRegionState
     if (lastDeviceKind != PointerDeviceKind.touch) {
       return;
     }
-    if (isDesktop || !ffiModel.touchMode) {
+    if ((isDesktop || isWebDesktop) || !ffiModel.touchMode) {
       inputModel.tap(MouseButtons.right);
     }
   }
@@ -198,7 +208,7 @@ class _RawTouchGestureDetectorRegionState
       return;
     }
     if (!handleTouch) {
-      ffi.cursorModel.updatePan(d.delta.dx, d.delta.dy, handleTouch);
+      ffi.cursorModel.updatePan(d.delta, d.localPosition, handleTouch);
     }
   }
 
@@ -217,6 +227,12 @@ class _RawTouchGestureDetectorRegionState
       return;
     }
     if (handleTouch) {
+      if (ffi.cursorModel.shouldBlock(d.localPosition.dx, d.localPosition.dy)) {
+        return;
+      }
+      if (isDesktop) {
+        ffi.cursorModel.trySetRemoteWindowCoords();
+      }
       inputModel.sendMouse('down', MouseButtons.left);
       ffi.cursorModel.move(d.localPosition.dx, d.localPosition.dy);
     } else {
@@ -236,12 +252,18 @@ class _RawTouchGestureDetectorRegionState
     if (lastDeviceKind != PointerDeviceKind.touch) {
       return;
     }
-    ffi.cursorModel.updatePan(d.delta.dx, d.delta.dy, handleTouch);
+    if (ffi.cursorModel.shouldBlock(d.localPosition.dx, d.localPosition.dy)) {
+      return;
+    }
+    ffi.cursorModel.updatePan(d.delta, d.localPosition, handleTouch);
   }
 
   onOneFingerPanEnd(DragEndDetails d) {
     if (lastDeviceKind != PointerDeviceKind.touch) {
       return;
+    }
+    if (isDesktop) {
+      ffi.cursorModel.clearRemoteWindowCoords();
     }
     inputModel.sendMouse('up', MouseButtons.left);
   }
@@ -257,7 +279,7 @@ class _RawTouchGestureDetectorRegionState
     if (lastDeviceKind != PointerDeviceKind.touch) {
       return;
     }
-    if (isDesktop) {
+    if ((isDesktop || isWebDesktop)) {
       final scale = ((d.scale - _scale) * 1000).toInt();
       _scale = d.scale;
 
@@ -281,7 +303,7 @@ class _RawTouchGestureDetectorRegionState
     if (lastDeviceKind != PointerDeviceKind.touch) {
       return;
     }
-    if (isDesktop) {
+    if ((isDesktop || isWebDesktop)) {
       bind.sessionSendPointer(
           sessionId: sessionId,
           msg: json.encode(
@@ -404,7 +426,9 @@ class RawPointerMouseRegion extends StatelessWidget {
       onPointerPanZoomUpdate: inputModel.onPointerPanZoomUpdate,
       onPointerPanZoomEnd: inputModel.onPointerPanZoomEnd,
       child: MouseRegion(
-        cursor: cursor ?? MouseCursor.defer,
+        cursor: inputModel.isViewOnly
+            ? MouseCursor.defer
+            : (cursor ?? MouseCursor.defer),
         onEnter: onEnter,
         onExit: onExit,
         child: child,
